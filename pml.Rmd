@@ -1,0 +1,69 @@
+---
+title: "pml"
+output: 
+  html_document:
+    keep_md: yes
+date: "2025-04-08"
+---
+Setup
+===
+packages
+```{r,results='hide'}
+library(caret)
+```
+Reading in data and exploratory data analysis, and cleaning and splitting
+===
+```{r}
+training = read.csv("pml-training.csv") # read in training set
+testing = read.csv("pml-testing.csv") # read in testing set
+names(training) # display variable names to remove some insignificant ones for lighter data
+table(training$classe) # check that classes are not terribly skewed
+dim(testing);dim(training) # sizes of data
+sum(!complete.cases(training));sum(!complete.cases(testing)) # checking for missing data
+removeable = c(grep("^(skewness|avg|var|stddev|amplitude|kurtosis|min|max)",names(training)),1,2,3,4,6,7) # the grep function picks up variables that can be represented by other variables in the data (see codebook in question)
+training = subset(training,select = -removeable)
+testing = subset(testing,select = -removeable)
+sum(!complete.cases(training));sum(!complete.cases(testing)) # rechecking for missing data after removing insignificant variables
+set.seed(143) # for randomness in createDataPartition()
+trainInd = createDataPartition(training$classe,p = 0.7,list = FALSE)# train/test split
+train2 = training[trainInd,]
+test2 = training[-trainInd,]
+```
+Evaluating models
+===
+We begin with reviewing a simple rpart decision tree on the data, as it is inexpensive to train, making it highly scalable
+```{r}
+# rpart decision tree
+set.seed(197) # for randomness in train()
+modelrpart = train(classe~.,method="rpart",data=train2,trControl = trainControl(method = "cv"))
+table(predict(modelrpart,test2[-54]))
+```
+rpart was unable to classify into D, making it unsuitable. An ensemble of randomised decision trees (ie random forest) may work better, as random variables are included. Before trying that, training data will, again, be split by train/split to prevent overfitting to in sample errors. As this is simply part of feature selection in cross validation, a small ensemble of 5 trees with 3 folds will be used.
+```{r,results='hold'}
+#random forest
+set.seed(1819) # for randomness in createDataPartition() and train()
+trainInd = createDataPartition(train2$classe,p = 0.7,list=FALSE) # further train/test split
+train3 = train2[trainInd,]
+test3 = train2[-trainInd,]
+startTime = Sys.time() 
+modelrf = train(classe~.,method="rf",data=train3,trControl = trainControl(method="cv",number = 3),ntree=5)
+Sys.time()-startTime # prints time taken for fitting
+confusionMatrix(as.factor(test3$classe),predict(modelrf,test3[,-54]))$table
+confusionMatrix(as.factor(test3$classe),predict(modelrf,test3[,-54]))$overall
+```
+This shows how random forest works a lot better, even with only 3 fold cross validation and ensembling 5 trees producing a very high accuracy of 0.983. Preprocesisng looks unnecessary. The short time frame for model fitting also means we can afford to increase ntree to 50 and number of folds to 10 for less bias, training on train2 and validating with test2.
+```{r,results='hold'}
+set.seed(2025)
+startTime = Sys.time()
+modelfinal = train(classe~.,method="rf",data=train2,trControl = trainControl(method="cv",number = 10),ntree=50)
+Sys.time()-startTime # prints time taken for fitting
+confusionMatrix(as.factor(test2$classe),predict(modelfinal,test2[,-54]))$table
+confusionMatrix(as.factor(test2$classe),predict(modelfinal,test2[,-54]))$overall
+```
+Accuracy is even higher at 99.5% and only takes about 2.5 minutes to fit, still making it possible to scale. As model selection for modelfinal is based on metrics from a subsample, we can expect that the model is not overfitted onto the data, and will be representative of the population sample. Hence, an error rate of around 0.5% can be expected out of sample.
+
+The model's prediction of the 20 test cases in testing
+===
+```{r}
+predict(modelfinal,testing)
+```
